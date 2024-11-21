@@ -1,277 +1,189 @@
-;; NeuroGig: AI-Powered Decentralized Talent Ecosystem Smart Contract
+;; NeuroGig: AI-Powered Decentralized Freelance Platform
+
+;; Define the fungible token for payments
+(define-fungible-token neurogig-token)
 
 ;; Define constants
 (define-constant contract-owner tx-sender)
 (define-constant err-owner-only (err u100))
-(define-constant err-not-found (err u101))
-(define-constant err-already-exists (err u102))
-(define-constant err-unauthorized (err u103))
-(define-constant err-ai-verification-failed (err u104))
-(define-constant err-insufficient-funds (err u105))
-(define-constant err-milestone-not-completed (err u106))
-(define-constant err-invalid-referral (err u107))
+(define-constant err-not-found (err u404))
+(define-constant err-unauthorized (err u401))
 
-;; Define tokens for rewards and incentives
-(define-fungible-token neurogig-token)
+;; Define data variables
+(define-data-var next-user-id uint u0)
+(define-data-var next-project-id uint u0)
+(define-data-var next-bid-id uint u0)
+(define-data-var next-contract-id uint u0)
 
 ;; Define data maps
-(define-map Tasks 
-  { task-id: uint }
+(define-map users uint 
   {
-    client: principal,
-    freelancer: principal,
-    arbiter: (optional principal),
-    total-payment: uint,
-    milestones: (list 10 { description: (string-ascii 100), payment: uint, completed: bool, approved-by-client: bool, approved-by-freelancer: bool, deadline: uint }),
-    current-milestone: uint,
-    is-completed: bool,
-    escrow-balance: uint,
-    early-completion-bonus: uint
+    address: principal,
+    role: (string-ascii 20),
+    reputation: uint
   }
 )
 
-(define-map Users
-  { user: principal }
+(define-map user-addresses principal uint)
+
+(define-map projects uint 
   {
-    referral-count: uint,
-    completed-tasks: uint,
-    loyalty-points: uint
+    owner: uint,
+    title: (string-ascii 100),
+    description: (string-ascii 500),
+    budget: uint,
+    status: (string-ascii 20)
   }
 )
 
-(define-map Referrals
-  { referrer: principal, referred: principal }
-  { is-valid: bool }
+(define-map bids uint 
+  {
+    project-id: uint,
+    bidder: uint,
+    amount: uint,
+    proposal: (string-ascii 500)
+  }
 )
 
-;; Define variables
-(define-data-var next-task-id uint u0)
-(define-data-var referral-reward uint u100)  ;; 100 tokens per referral
-(define-data-var early-completion-bonus-rate uint u10)  ;; 10% bonus for early completion
-(define-data-var loyalty-point-rate uint u5)  ;; 5 loyalty points per completed task
+(define-map contracts uint 
+  {
+    project-id: uint,
+    freelancer: uint,
+    client: uint,
+    amount: uint,
+    status: (string-ascii 20)
+  }
+)
 
-;; Define functions
-(define-public (create-task (freelancer principal) (arbiter (optional principal)) (total-payment uint) (milestones (list 10 { description: (string-ascii 100), payment: uint, completed: bool, approved-by-client: bool, approved-by-freelancer: bool, deadline: uint })))
-  (let ((task-id (var-get next-task-id)))
-    (asserts! (>= (stx-get-balance tx-sender) total-payment) err-insufficient-funds)
-    (try! (stx-transfer? total-payment tx-sender (as-contract tx-sender)))
-    (map-set Tasks { task-id: task-id }
+;; Define public functions
+
+;; Register a new user
+(define-public (register-user (role (string-ascii 20)))
+  (let
+    (
+      (user-id (var-get next-user-id))
+    )
+    (map-set users user-id
       {
-        client: tx-sender,
-        freelancer: freelancer,
-        arbiter: arbiter,
-        total-payment: total-payment,
-        milestones: milestones,
-        current-milestone: u0,
-        is-completed: false,
-        escrow-balance: total-payment,
-        early-completion-bonus: u0
+        address: tx-sender,
+        role: role,
+        reputation: u0
       }
     )
-    (var-set next-task-id (+ task-id u1))
-    (ok task-id)
+    (map-set user-addresses tx-sender user-id)
+    (var-set next-user-id (+ user-id u1))
+    (ok user-id)
   )
 )
 
-(define-public (complete-milestone (task-id uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (current-milestone (get current-milestone task))
-    (milestones (get milestones task))
-    (milestone (unwrap! (element-at milestones current-milestone) err-not-found))
-  )
-    (asserts! (is-eq (get freelancer task) tx-sender) err-unauthorized)
-    (asserts! (< current-milestone (len milestones)) err-not-found)
-    
-    ;; Simulate AI/ML verification (In a real-world scenario, this would be an oracle or external verification)
-    (if (is-ai-verified task-id)
-      (begin
-        (map-set Tasks { task-id: task-id }
-          (merge task {
-            milestones: (replace-at milestones current-milestone (merge milestone { completed: true, approved-by-freelancer: true })),
-            current-milestone: (+ current-milestone u1),
-            early-completion-bonus: (if (< block-height (get deadline milestone))
-                                        (+ (get early-completion-bonus task) (/ (* (get payment milestone) (var-get early-completion-bonus-rate)) u100))
-                                        (get early-completion-bonus task))
-          })
-        )
-        (ok true)
-      )
-      err-ai-verification-failed
+;; Create a new project
+(define-public (create-project (title (string-ascii 100)) (description (string-ascii 500)) (budget uint))
+  (let
+    (
+      (project-id (var-get next-project-id))
+      (user-id (get-user-id tx-sender))
     )
-  )
-)
-
-(define-read-only (is-ai-verified (task-id uint))
-  ;; Simulate AI/ML verification (replace with actual implementation)
-  (is-eq (mod task-id u2) u0) ;; Simple simulation: even task-ids are verified
-)
-
-(define-public (approve-milestone (task-id uint) (milestone-index uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (milestones (get milestones task))
-    (milestone (unwrap! (element-at milestones milestone-index) err-not-found))
-  )
-    (asserts! (is-eq (get client task) tx-sender) err-unauthorized)
-    (asserts! (get completed milestone) err-milestone-not-completed)
-    (map-set Tasks { task-id: task-id }
-      (merge task {
-        milestones: (replace-at milestones milestone-index (merge milestone { approved-by-client: true }))
-      })
+    (asserts! (is-some user-id) err-not-found)
+    (map-set projects project-id
+      {
+        owner: (unwrap-panic user-id),
+        title: title,
+        description: description,
+        budget: budget,
+        status: "open"
+      }
     )
-    (try! (release-payment task-id milestone-index))
-    (ok true)
+    (var-set next-project-id (+ project-id u1))
+    (ok project-id)
   )
 )
 
-(define-private (release-payment (task-id uint) (milestone-index uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (milestone (unwrap! (element-at (get milestones task) milestone-index) err-not-found))
-    (payment-amount (get payment milestone))
-    (bonus-amount (get early-completion-bonus task))
-    (total-amount (+ payment-amount bonus-amount))
-  )
-    (asserts! (and (get approved-by-client milestone) (get approved-by-freelancer milestone)) err-unauthorized)
-    (asserts! (<= total-amount (get escrow-balance task)) err-insufficient-funds)
-    (try! (as-contract (stx-transfer? total-amount tx-sender (get freelancer task))))
-    (map-set Tasks { task-id: task-id }
-      (merge task {
-        escrow-balance: (- (get escrow-balance task) total-amount),
-        early-completion-bonus: u0
-      })
+;; Submit a bid for a project
+(define-public (submit-bid (project-id uint) (amount uint) (proposal (string-ascii 500)))
+  (let
+    (
+      (bid-id (var-get next-bid-id))
+      (user-id (get-user-id tx-sender))
     )
-    (try! (update-user-stats (get freelancer task) (get client task)))
-    (ok true)
-  )
-)
-
-(define-public (request-partial-payment (task-id uint) (milestone-index uint) (partial-amount uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (milestones (get milestones task))
-    (milestone (unwrap! (element-at milestones milestone-index) err-not-found))
-  )
-    (asserts! (is-eq (get freelancer task) tx-sender) err-unauthorized)
-    (asserts! (<= partial-amount (get payment milestone)) err-insufficient-funds)
-    (asserts! (get completed milestone) err-milestone-not-completed)
-    (map-set Tasks { task-id: task-id }
-      (merge task {
-        milestones: (replace-at milestones milestone-index (merge milestone { payment: (- (get payment milestone) partial-amount), approved-by-freelancer: true }))
-      })
+    (asserts! (is-some user-id) err-not-found)
+    (asserts! (is-some (map-get? projects project-id)) err-not-found)
+    (map-set bids bid-id
+      {
+        project-id: project-id,
+        bidder: (unwrap-panic user-id),
+        amount: amount,
+        proposal: proposal
+      }
     )
-    (ok true)
+    (var-set next-bid-id (+ bid-id u1))
+    (ok bid-id)
   )
 )
 
-(define-public (approve-partial-payment (task-id uint) (milestone-index uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (milestones (get milestones task))
-    (milestone (unwrap! (element-at milestones milestone-index) err-not-found))
-  )
-    (asserts! (is-eq (get client task) tx-sender) err-unauthorized)
-    (asserts! (get completed milestone) err-milestone-not-completed)
-    (map-set Tasks { task-id: task-id }
-      (merge task {
-        milestones: (replace-at milestones milestone-index (merge milestone { approved-by-client: true }))
-      })
+;; Accept a bid and create a contract
+(define-public (accept-bid (bid-id uint))
+  (let
+    (
+      (bid (unwrap! (map-get? bids bid-id) err-not-found))
+      (project (unwrap! (map-get? projects (get project-id bid)) err-not-found))
+      (contract-id (var-get next-contract-id))
+      (user-id (get-user-id tx-sender))
     )
-    (try! (release-payment task-id milestone-index))
-    (ok true)
+    (asserts! (is-some user-id) err-not-found)
+    (asserts! (is-eq (unwrap-panic user-id) (get owner project)) err-unauthorized)
+    (map-set contracts contract-id
+      {
+        project-id: (get project-id bid),
+        freelancer: (get bidder bid),
+        client: (get owner project),
+        amount: (get amount bid),
+        status: "active"
+      }
+    )
+    (map-set projects (get project-id bid)
+      (merge project { status: "in-progress" })
+    )
+    (var-set next-contract-id (+ contract-id u1))
+    (ok contract-id)
   )
 )
 
-(define-public (complete-task (task-id uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-  )
-    (asserts! (is-eq (get client task) tx-sender) err-unauthorized)
-    (map-set Tasks { task-id: task-id }
-      (merge task { is-completed: true })
+;; Complete a contract and transfer payment
+(define-public (complete-contract (contract-id uint))
+  (let
+    (
+      (contract (unwrap! (map-get? contracts contract-id) err-not-found))
+      (user-id (get-user-id tx-sender))
+      (freelancer-address (unwrap! (get-user-address (get freelancer contract)) err-not-found))
+    )
+    (asserts! (is-some user-id) err-not-found)
+    (asserts! (is-eq (unwrap-panic user-id) (get client contract)) err-unauthorized)
+    (asserts! (is-eq (get status contract) "active") err-unauthorized)
+    (try! (as-contract (ft-transfer? neurogig-token (get amount contract) tx-sender freelancer-address)))
+    (map-set contracts contract-id
+      (merge contract { status: "completed" })
+    )
+    (map-set projects (get project-id contract)
+      (merge (unwrap-panic (map-get? projects (get project-id contract))) { status: "completed" })
     )
     (ok true)
   )
 )
 
-(define-public (refund-remaining-balance (task-id uint))
-  (let (
-    (task (unwrap! (map-get? Tasks { task-id: task-id }) err-not-found))
-    (remaining-balance (get escrow-balance task))
-  )
-    (asserts! (is-eq (get client task) tx-sender) err-unauthorized)
-    (asserts! (get is-completed task) err-unauthorized)
-    (asserts! (> remaining-balance u0) err-insufficient-funds)
-    (try! (as-contract (stx-transfer? remaining-balance tx-sender (get client task))))
-    (map-set Tasks { task-id: task-id }
-      (merge task { escrow-balance: u0 })
-    )
-    (ok true)
+;; Helper function to get user ID from principal
+(define-private (get-user-id (user principal))
+  (map-get? user-addresses user)
+)
+
+;; Helper function to get user address (principal) from user ID
+(define-private (get-user-address (user-id uint))
+  (match (map-get? users user-id)
+    user (some (get address user))
+    none
   )
 )
 
-(define-public (refer-user (referred principal))
-  (let (
-    (referrer tx-sender)
-  )
-    (asserts! (not (is-eq referrer referred)) err-invalid-referral)
-    (asserts! (is-none (map-get? Users { user: referred })) err-already-exists)
-    (map-set Referrals { referrer: referrer, referred: referred } { is-valid: true })
-    (ok true)
-  )
+;; Initialize the contract
+(begin
+  (try! (ft-mint? neurogig-token u1000000000 contract-owner))
 )
-
-(define-public (claim-referral-reward (referred principal))
-  (let (
-    (referrer tx-sender)
-    (referral (unwrap! (map-get? Referrals { referrer: referrer, referred: referred }) err-not-found))
-  )
-    (asserts! (get is-valid referral) err-invalid-referral)
-    (try! (mint-tokens referrer (var-get referral-reward)))
-    (map-set Referrals { referrer: referrer, referred: referred } { is-valid: false })
-    (ok true)
-  )
-)
-
-(define-private (update-user-stats (freelancer principal) (client principal))
-  (let (
-    (freelancer-stats (default-to { referral-count: u0, completed-tasks: u0, loyalty-points: u0 } (map-get? Users { user: freelancer })))
-    (client-stats (default-to { referral-count: u0, completed-tasks: u0, loyalty-points: u0 } (map-get? Users { user: client })))
-  )
-    (map-set Users { user: freelancer }
-      (merge freelancer-stats {
-        completed-tasks: (+ (get completed-tasks freelancer-stats) u1)
-      })
-    )
-    (map-set Users { user: client }
-      (merge client-stats {
-        loyalty-points: (+ (get loyalty-points client-stats) (var-get loyalty-point-rate))
-      })
-    )
-    (ok true)
-  )
-)
-
-(define-public (redeem-loyalty-points (amount uint))
-  (let (
-    (user-stats (unwrap! (map-get? Users { user: tx-sender }) err-not-found))
-    (current-points (get loyalty-points user-stats))
-  )
-    (asserts! (>= current-points amount) err-insufficient-funds)
-    (map-set Users { user: tx-sender }
-      (merge user-stats {
-        loyalty-points: (- current-points amount)
-      })
-    )
-    (try! (mint-tokens tx-sender amount))
-    (ok true)
-  )
-)
-
-(define-private (mint-tokens (recipient principal) (amount uint))
-  (ft-mint? neurogig-token amount recipient)
-)
-
-;; Initialize variables
-(define-data-var next-task-id uint u0)
